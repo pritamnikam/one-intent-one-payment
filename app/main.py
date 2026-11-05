@@ -11,7 +11,7 @@ from qdrant_client import QdrantClient
 
 from app.cards.ramp_agent_cards import AGENT_CARDS
 from app.guardrail.gate import evaluate_intent
-from app.models import AP2Intent, GuardrailDecision, PaymentSubmission, PolicySearchResult
+from app.models import AP2Intent, GuardrailDecision, PaymentReq, PaymentSubmission, PolicySearchResult
 from app.retrieval.hybrid_rrf import HybridPolicySearch, create_qdrant_client
 from app.safety.outbox import (
     DATABASE_URL,
@@ -90,10 +90,15 @@ async def agent_cards() -> list[dict]:
 async def search_policies(
     q: str = Query(min_length=1, max_length=500),
     limit: int = Query(default=5, ge=1, le=20),
-) -> list[dict]:
+) -> list[PolicySearchResult]:
+    return await _search_policy_results(q, limit)
+
+
+async def _search_policy_results(q: str, limit: int) -> list[PolicySearchResult]:
     search: HybridPolicySearch = app.state.policy_search
     try:
-        return await asyncio.to_thread(search.search, q, limit)
+        results = await asyncio.to_thread(search.search, q, limit)
+        return [PolicySearchResult.model_validate(result) for result in results]
     except Exception as error:
         logger.exception("Policy retrieval failed.")
         raise HTTPException(status_code=503, detail="Policy retrieval is temporarily unavailable.") from error
@@ -104,11 +109,11 @@ async def authorize_intent(
     intent: AP2Intent,
     idempotency_key: str = Header(alias="Idempotency-Key", min_length=1, max_length=200),
 ) -> PaymentSubmission:
-    policy_results = await search_policies(
-        q=f"{intent.description} {intent.currency} {intent.amount} {intent.merchant}",
-        limit=3,
+    policy_results = await _search_policy_results(
+        f"{intent.description} {intent.currency} {intent.amount} {intent.merchant}",
+        3,
     )
-    decision: GuardrailDecision = evaluate_intent(
+    decision = evaluate_intent(
         intent,
         policy_ids=[result.policy_id for result in policy_results],
     )
@@ -128,8 +133,8 @@ async def authorize_intent(
     return PaymentSubmission(intent=intent, decision=decision, payment=payment)
 
 
-@app.get("/payments/{payment_id}", response_model=PaymentSubmission, tags=["payments"])
-async def payment_status(payment_id: UUID) -> PaymentSubmission:
+@app.get("/payments/{payment_id}", response_model=PaymentReq, tags=["payments"])
+async def payment_status(payment_id: UUID) -> PaymentReq:
     try:
         payment = await get_payment(payment_id, DATABASE_URL)
     except Exception as error:
@@ -137,17 +142,4 @@ async def payment_status(payment_id: UUID) -> PaymentSubmission:
         raise HTTPException(status_code=503, detail="Payment status is temporarily unavailable.") from error
     if payment is None:
         raise HTTPException(status_code=404, detail="Payment not found.")
-    intent = AP2Intent(
-        intent_id=payment.intent_id,
-        user_id="not-stored",
-        merchant=payment.merchant,
-        description="Intent metadata is not persisted in this demo.",
-        amount=payment.amount,
-        currency=payment.currency,
-        rail=payment.rail,
-    )
-    return PaymentSubmission(
-        intent=intent,
-        decision=GuardrailDecision(allowed=True, reason="Previously authorized intent."),
-        payment=payment,
-    )
+    return payment

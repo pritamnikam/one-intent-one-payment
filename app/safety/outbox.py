@@ -24,7 +24,7 @@ CREATE TABLE IF NOT EXISTS payments (
     currency CHAR(3) NOT NULL,
     merchant TEXT NOT NULL,
     rail TEXT NOT NULL CHECK (rail IN ('mpp', 'x402')),
-    status TEXT NOT NULL CHECK (status IN ('pending', 'simulated', 'denied')),
+    status TEXT NOT NULL CHECK (status IN ('pending', 'simulated', 'denied', 'failed')),
     created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 

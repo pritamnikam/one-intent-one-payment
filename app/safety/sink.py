@@ -31,31 +31,27 @@ async def process_one(database_url: str = DATABASE_URL) -> bool:
             event = await cursor.fetchone()
             if event is None:
                 return False
-            await connection.execute(
-                """
-                UPDATE payment_outbox
-                SET status = 'processing', attempts = attempts + 1
-                WHERE event_id = %s
-                """,
-                (event["event_id"],),
-            )
-
-        try:
-            await _simulate_sink(event["payload"])
-        except Exception:
-            logger.exception("Safety sink failed for outbox event %s", event["event_id"])
-            async with connection.transaction():
+            try:
+                await _simulate_sink(event["payload"])
+            except Exception:
+                logger.exception("Safety sink failed for outbox event %s", event["event_id"])
                 await connection.execute(
-                    "UPDATE payment_outbox SET status = 'failed' WHERE event_id = %s",
+                    """
+                    UPDATE payment_outbox
+                    SET status = 'failed', attempts = attempts + 1
+                    WHERE event_id = %s
+                    """,
                     (event["event_id"],),
                 )
-            raise
-
-        async with connection.transaction():
+                await connection.execute(
+                    "UPDATE payments SET status = 'failed' WHERE payment_id = %s",
+                    (event["payment_id"],),
+                )
+                return True
             await connection.execute(
                 """
                 UPDATE payment_outbox
-                SET status = 'processed', processed_at = now()
+                SET status = 'processed', attempts = attempts + 1, processed_at = now()
                 WHERE event_id = %s
                 """,
                 (event["event_id"],),
@@ -81,6 +77,7 @@ async def run_sink(database_url: str = DATABASE_URL) -> None:
         try:
             async with await psycopg.AsyncConnection.connect(database_url) as listener:
                 await listener.execute("LISTEN payment_outbox")
+                await listener.commit()
                 logger.info("Listening for payment_outbox notifications.")
                 while True:
                     while await process_one(database_url):

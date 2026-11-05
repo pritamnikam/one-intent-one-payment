@@ -75,7 +75,7 @@ Useful endpoints:
 Seed or refresh the default Qdrant policies while the stack is running:
 
 ```powershell
-docker compose exec api python scripts/seed_policies.py
+docker compose exec api python -m scripts.seed_policies
 ```
 
 ## Repository layout

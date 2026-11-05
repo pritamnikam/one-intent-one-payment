@@ -3,7 +3,7 @@ from decimal import Decimal
 from typing import Literal
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AP2Intent(BaseModel):
@@ -27,7 +27,7 @@ class PaymentReq(BaseModel):
     merchant: str
     rail: Literal["mpp", "x402"]
     idempotency_key: str = Field(min_length=1, max_length=200)
-    status: Literal["pending", "simulated", "denied"] = "pending"
+    status: Literal["pending", "simulated", "denied", "failed"] = "pending"
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
