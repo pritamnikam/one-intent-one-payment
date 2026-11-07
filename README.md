@@ -21,13 +21,46 @@ Client
 
 Retrieved policies are evidence for inspection, not authorization instructions. The guardrail is deterministic and does not rely on an LLM or retrieved text to approve a payment. Policy vectors use deterministic feature hashing to keep this PoC lightweight; they are not semantic model embeddings.
 
+## Life of a request: master guide
+
+The full developer validation playbook is [TESTING_GUIDE.md](./TESTING_GUIDE.md). It exercises every HTTP route and the related worker/recovery workflows, with expected status codes and negative cases. This section explains what happens to one valid payment intent from the client through its final state.
+
+1. **Start and check dependencies.** Docker Compose starts PostgreSQL, Qdrant, the FastAPI service, and the outbox worker. `/healthz` reports whether the API process is alive; `/readyz` checks PostgreSQL and the Qdrant policy collection before the API is considered ready.
+2. **Authenticate the caller.** A developer issues a short-lived local JWT. The API validates its signature, issuer, audience, expiry, and scope. For a payment write the token needs `intents:write`, and its subject must exactly match `intent.user_id`.
+3. **Submit one declared intent.** The client calls `POST /intents/authorize` with the JSON intent and an `Idempotency-Key`. Pydantic validates the UUID, strings, decimal amount, currency shape, and rail. Authentication failures, scope failures, subject mismatch, and malformed input are rejected before creating a payment.
+4. **Retrieve evidence and decide deterministically.** The API searches Qdrant and BM25/RRF for relevant policy records. These results are returned as policy IDs in the decision, but are not executable instructions. The deterministic guardrail checks supported currency (`USD`/`EUR`), the `100.00` demo ceiling, and the intent's optional `max_amount`.
+5. **Commit once, or record the denial.**
+   - If denied, PostgreSQL records a `payment.intent.denied` audit event and returns the decision with `payment=null`.
+   - If allowed, one PostgreSQL transaction creates the payment row, its durable outbox event, and a `payment.intent.authorized` audit event, then sends a `pg_notify` wake-up. Database uniqueness plus transaction locks enforce one payment per intent and idempotency key.
+   - A matching retry returns the existing payment and records a replay. Reusing the intent or key with a different request returns HTTP 409 and records a conflict.
+6. **Dispatch asynchronously.** The worker listens for notifications and also polls the durable outbox, so a missed notification does not lose work. In the default simulation provider it marks the payment `simulated` and explicitly does not move funds. In optional Stripe test mode it creates a test PaymentIntent with a stable provider idempotency key. A PaymentIntent is not a completed payment: the owner confirms it client-side using Stripe.js.
+7. **Observe provider state and audit.** In Stripe test mode, Stripe CLI forwards a signed webhook. The API verifies the signature and test-mode flag, deduplicates event IDs, and updates the payment state. The owner can read status from `GET /payments/{payment_id}` and history from either audit route; the payment's `client_secret` is only returned to its owner and is cleared for succeeded/canceled statuses.
+8. **Monitor or recover.** `/metrics` exposes API metrics and the worker exports outbox metrics on port 9100, both loopback-bound. Transient worker errors retry with capped backoff; exhausted events become failed/dead-lettered for an explicit, audited operator recovery. Recovery does not cancel an existing provider-side PaymentIntent.
+
+The request lifecycle is:
+
+```text
+Client + scoped JWT
+    -> POST /intents/authorize
+    -> schema validation + subject/scope authorization
+    -> Qdrant/BM25 evidence + deterministic guardrails
+       -> denied: append audit event -> response, no payment
+       -> allowed: PostgreSQL payment + outbox + audit transaction
+    -> worker consumes durable outbox
+       -> simulation: status=simulated, no funds moved
+       -> Stripe test: PaymentIntent -> owner confirmation -> signed webhook
+    -> owner reads payment status/audit; operator handles dead letters if needed
+```
+
+The simulation is the recommended first walkthrough. The [testing guide](./TESTING_GUIDE.md) contains copy/paste PowerShell commands for this flow, endpoint-by-endpoint checks, validation failures, idempotency cases, ownership checks, Stripe test mode, and outbox recovery.
+
 ## Run locally with Docker Compose
 
 Requirements: Docker Desktop (or Docker Engine) with the Compose plugin.
 
 ```powershell
 python -m scripts.init_local_secrets
-Copy-Item .env.example .env
+if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 docker compose up --build
 ```
 
@@ -37,9 +70,9 @@ The initializer creates random JWT and PostgreSQL passwords in `.secrets/` and e
 
 Stop the containers with `Ctrl+C`, or run `docker compose down`. To preserve the local database and Qdrant data, leave the named volumes in place. `docker compose down -v` deletes those volumes.
 
-## Demo
+## Life of a request: simulation walkthrough
 
-Issue a short-lived local development token for the `demo-user` identity:
+This walkthrough creates a short-lived local development token for the `demo-user` identity:
 
 ```powershell
 $token = (docker compose exec -T api python -m scripts.issue_token `
