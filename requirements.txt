@@ -3,3 +3,6 @@ uvicorn[standard]==0.34.2
 psycopg[binary]==3.3.6
 qdrant-client==1.14.2
 rank-bm25==0.2.2
+PyJWT==2.10.1
+stripe==16.1.0
+prometheus-client==0.21.1

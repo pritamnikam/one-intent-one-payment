@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -26,8 +26,22 @@ class PaymentReq(BaseModel):
     currency: str
     merchant: str
     rail: Literal["mpp", "x402"]
+    provider: Literal["simulation", "stripe_test"] = "simulation"
     idempotency_key: str = Field(min_length=1, max_length=200)
-    status: Literal["pending", "simulated", "denied", "failed"] = "pending"
+    status: Literal[
+        "pending",
+        "simulated",
+        "denied",
+        "failed",
+        "requires_payment_method",
+        "requires_confirmation",
+        "requires_action",
+        "processing",
+        "requires_capture",
+        "succeeded",
+        "canceled",
+    ] = "pending"
+    client_secret: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
@@ -48,3 +62,14 @@ class PolicySearchResult(BaseModel):
     text: str
     score: float
     sources: list[str]
+
+
+class PaymentAuditEvent(BaseModel):
+    audit_id: UUID
+    intent_id: UUID
+    payment_id: UUID | None
+    actor_id: str
+    event_type: str
+    outcome: str
+    details: dict[str, Any]
+    created_at: datetime

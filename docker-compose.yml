@@ -4,11 +4,13 @@ services:
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-payments}
       POSTGRES_USER: ${POSTGRES_USER:-demo}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-local-dev-password}
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - postgres_data:/var/lib/postgresql/data
+    secrets:
+      - postgres_password
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
       interval: 3s
@@ -18,24 +20,37 @@ services:
   qdrant:
     image: qdrant/qdrant:v1.14.1
     ports:
-      - "${QDRANT_PORT:-6333}:6333"
+      - "127.0.0.1:${QDRANT_PORT:-6333}:6333"
     volumes:
       - qdrant_data:/qdrant/storage
 
   api:
     build: .
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-demo}:${POSTGRES_PASSWORD:-local-dev-password}@postgres:5432/${POSTGRES_DB:-payments}
+      POSTGRES_DB: ${POSTGRES_DB:-payments}
+      POSTGRES_USER: ${POSTGRES_USER:-demo}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
       QDRANT_URL: http://qdrant:6333
+      JWT_SECRET_FILE: /run/secrets/jwt_secret
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-simulation}
+      STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key
+      STRIPE_WEBHOOK_SECRET_FILE: /run/secrets/stripe_webhook_secret
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    secrets:
+      - jwt_secret
+      - stripe_secret_key
+      - stripe_webhook_secret
+      - postgres_password
     ports:
-      - "${API_PORT:-8000}:8000"
+      - "127.0.0.1:${API_PORT:-8000}:8000"
     healthcheck:
       test:
         - CMD
         - python
         - -c
-        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/healthz', timeout=2)"
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/readyz', timeout=2)"
       interval: 5s
       timeout: 3s
       retries: 20
@@ -49,8 +64,20 @@ services:
     build: .
     command: ["python", "-m", "app.safety.sink"]
     environment:
-      DATABASE_URL: postgresql://${POSTGRES_USER:-demo}:${POSTGRES_PASSWORD:-local-dev-password}@postgres:5432/${POSTGRES_DB:-payments}
+      POSTGRES_DB: ${POSTGRES_DB:-payments}
+      POSTGRES_USER: ${POSTGRES_USER:-demo}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_PASSWORD_FILE: /run/secrets/postgres_password
+      PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-simulation}
+      STRIPE_SECRET_KEY_FILE: /run/secrets/stripe_secret_key
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      SINK_METRICS_PORT: 9100
+    secrets:
+      - stripe_secret_key
+      - postgres_password
+    ports:
+      - "127.0.0.1:${SINK_METRICS_PORT:-9100}:9100"
     depends_on:
       postgres:
         condition: service_healthy
@@ -60,3 +87,13 @@ services:
 volumes:
   postgres_data:
   qdrant_data:
+
+secrets:
+  postgres_password:
+    file: ./.secrets/postgres_password
+  jwt_secret:
+    file: ./.secrets/jwt_secret
+  stripe_secret_key:
+    file: ./.secrets/stripe_secret_key
+  stripe_webhook_secret:
+    file: ./.secrets/stripe_webhook_secret

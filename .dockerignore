@@ -3,4 +3,5 @@
 __pycache__
 *.py[cod]
 .env
+.secrets
 .pytest_cache
